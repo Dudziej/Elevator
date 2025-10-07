@@ -1,11 +1,15 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Elevator, HallCall, SystemConfig, SystemState } from '../core/types';
+import { Command } from '../core/commands';
 
 @Injectable()
 export class ElevatorService implements OnModuleInit, OnModuleDestroy {
   private state: SystemState;
   private timer?: ReturnType<typeof setInterval>;
   private paused = false;
+  private queue: Command[] = [];
+  private seenKeys = new Map<string, number>();
+  private readonly IDEMP_TTL_MS = 2500;
 
   constructor() {
     this.state = this.makeInitialState();
@@ -69,16 +73,18 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
 
   callElevator(floor: number, direction: 'up' | 'down') {
     if (!this.isValidFloor(floor)) return;
-    const call: HallCall = { floor, direction, ts: Date.now() };
-    const exists = this.state.elevators.some((e) => e.targets.has(floor));
-    if (!exists) this.assignHallCall(call);
+    const key = `call:${floor}:${direction}`;
+    if (this.isIdemp(key)) return;
+    this.addIdemp(key);
+    this.queue.push({ type: 'call', floor, direction, ts: Date.now() });
   }
 
   selectFloor(elevatorId: number, floor: number) {
     if (!this.isValidFloor(floor)) return;
-    const e = this.state.elevators.find((x) => x.id === elevatorId);
-    if (!e) return;
-    this.enqueueTarget(e, floor);
+    const key = `select:${elevatorId}:${floor}`;
+    if (this.isIdemp(key)) return;
+    this.addIdemp(key);
+    this.queue.push({ type: 'select', elevatorId, floor, ts: Date.now() });
   }
 
   pause() {
@@ -110,6 +116,23 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+  }
+
+  private addIdemp(key: string) {
+    this.seenKeys.set(key, Date.now() + this.IDEMP_TTL_MS);
+  }
+
+  private isIdemp(key: string) {
+    const now = Date.now();
+    const exp = this.seenKeys.get(key);
+    if (exp && exp > now) return true;
+    if (exp && exp <= now) this.seenKeys.delete(key);
+    return false;
+  }
+
+  private gcIdemp() {
+    const now = Date.now();
+    for (const [k, exp] of this.seenKeys) if (exp <= now) this.seenKeys.delete(k);
   }
 
   // ---------- Scheduler ----------
@@ -172,6 +195,17 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
   // ---------- Simulation tick ----------
   private tick() {
     this.state.ts = Date.now();
+    this.gcIdemp();
+
+    for (let i = 0; i < 50 && this.queue.length > 0; i++) {
+      const cmd = this.queue.shift()!;
+      if (cmd.type === 'call')
+        this.assignHallCall({ floor: cmd.floor, direction: cmd.direction, ts: cmd.ts });
+      else if (cmd.type === 'select') {
+        const e = this.state.elevators.find((x) => x.id === cmd.elevatorId);
+        if (e) this.enqueueTarget(e, cmd.floor);
+      }
+    }
 
     if (this.state.pendingHallCalls.length) {
       const rest: HallCall[] = [];

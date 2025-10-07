@@ -12,6 +12,7 @@ type StatePublic = {
 type InternalSvc = {
   state: SystemState;
   tick: () => void;
+  step: (n?: number) => void;
 };
 
 describe('ElevatorService', () => {
@@ -25,6 +26,9 @@ describe('ElevatorService', () => {
     internal.state.elevators[1]!.currentFloor = 8;
 
     svc.callElevator(2, 'up');
+
+    if (typeof internal.step === 'function') internal.step(1);
+    else internal.tick();
 
     const st = svc.getState() as StatePublic;
     expect(st.elevators.some((e) => e.targets.includes(2))).toBe(true);
