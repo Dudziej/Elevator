@@ -1,28 +1,47 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Elevator, HallCall, SystemConfig, SystemState } from '../core/types';
 import { Command } from '../core/commands';
+import type { StateStore } from '../core/store';
+
+type ElevatorLike = Omit<Elevator, 'targets'> & { targets: number[] | Set<number> };
 
 @Injectable()
 export class ElevatorService implements OnModuleInit, OnModuleDestroy {
   private state: SystemState;
   private timer?: ReturnType<typeof setInterval>;
   private paused = false;
+
   private queue: Command[] = [];
   private seenKeys = new Map<string, number>();
   private readonly IDEMP_TTL_MS = 2500;
 
-  constructor() {
+  private snapshotTickCounter = 0;
+  private get SNAPSHOT_EVERY_TICKS() {
+    return Math.max(1, Math.round(5000 / this.state.config.tickMs));
+  }
+
+  constructor(@Inject('STATE_STORE') private readonly store: StateStore) {
     this.state = this.makeInitialState();
   }
 
-  onModuleInit() {
-    if (process.env.NODE_ENV !== 'test') this.startTicker();
+  // ---------- Nest lifecycle ----------
+  async onModuleInit() {
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const snap = await this.store.load();
+        if (snap) this.rehydrateFromSnapshot(snap);
+      } catch {
+        // ignore
+      }
+      this.startTicker();
+    }
   }
 
   onModuleDestroy() {
     this.stopTicker();
   }
 
+  // ---------- Init ----------
   private makeInitialState(): SystemState {
     const config: SystemConfig = {
       floors: 16,
@@ -69,6 +88,7 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
     const { elevators } = this.state.config;
     this.state.elevators = Array.from({ length: elevators }, (_, id) => this.makeElevator(id));
     this.state.pendingHallCalls = [];
+    this.snapshotTickCounter = 0;
   }
 
   callElevator(floor: number, direction: 'up' | 'down') {
@@ -90,11 +110,9 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
   pause() {
     this.paused = true;
   }
-
   resume() {
     this.paused = false;
   }
-
   step(n = 1) {
     for (let i = 0; i < n; i++) this.tick();
   }
@@ -121,7 +139,6 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
   private addIdemp(key: string) {
     this.seenKeys.set(key, Date.now() + this.IDEMP_TTL_MS);
   }
-
   private isIdemp(key: string) {
     const now = Date.now();
     const exp = this.seenKeys.get(key);
@@ -129,10 +146,42 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
     if (exp && exp <= now) this.seenKeys.delete(key);
     return false;
   }
-
   private gcIdemp() {
     const now = Date.now();
     for (const [k, exp] of this.seenKeys) if (exp <= now) this.seenKeys.delete(k);
+  }
+
+  // ---------- Persistence helpers ----------
+  private rehydrateFromSnapshot(snap: SystemState) {
+    const sameShape =
+      snap.config?.floors === this.state.config.floors &&
+      snap.config?.elevators === this.state.config.elevators;
+
+    const base: SystemState = sameShape ? snap : this.makeInitialState();
+
+    const rehydratedElevators: Elevator[] = base.elevators.map((e: ElevatorLike): Elevator => {
+      const targetsArray = e.targets instanceof Set ? Array.from(e.targets) : e.targets;
+      return {
+        ...e,
+        targets: new Set<number>(targetsArray),
+      };
+    });
+
+    this.state = {
+      ...base,
+      elevators: rehydratedElevators,
+      ts: Date.now(),
+    };
+    this.snapshotTickCounter = 0;
+  }
+
+  private maybeSnapshot() {
+    if (process.env.NODE_ENV === 'test') return;
+    this.snapshotTickCounter++;
+    if (this.snapshotTickCounter >= this.SNAPSHOT_EVERY_TICKS) {
+      this.snapshotTickCounter = 0;
+      void this.store.save(this.state);
+    }
   }
 
   // ---------- Scheduler ----------
@@ -156,6 +205,7 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
       return false;
     });
     const pool = candidates.length ? candidates : elevators;
+
     const scored = pool.map((e) => {
       const dist = Math.abs(e.currentFloor - call.floor);
       const load = e.queueUp.length + e.queueDown.length;
@@ -199,9 +249,9 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
 
     for (let i = 0; i < 50 && this.queue.length > 0; i++) {
       const cmd = this.queue.shift()!;
-      if (cmd.type === 'call')
+      if (cmd.type === 'call') {
         this.assignHallCall({ floor: cmd.floor, direction: cmd.direction, ts: cmd.ts });
-      else if (cmd.type === 'select') {
+      } else if (cmd.type === 'select') {
         const e = this.state.elevators.find((x) => x.id === cmd.elevatorId);
         if (e) this.enqueueTarget(e, cmd.floor);
       }
@@ -262,5 +312,7 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
+
+    this.maybeSnapshot();
   }
 }

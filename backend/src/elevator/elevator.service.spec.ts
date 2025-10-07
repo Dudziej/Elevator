@@ -1,5 +1,6 @@
 import { ElevatorService } from './elevator.service';
 import type { Elevator, HallCall, SystemState, SystemConfig } from '../core/types';
+import type { StateStore } from '../core/store';
 
 type ElevatorPublic = Omit<Elevator, 'targets'> & { targets: number[] };
 type StatePublic = {
@@ -15,9 +16,14 @@ type InternalSvc = {
   step: (n?: number) => void;
 };
 
+const mockStore = (): StateStore => ({
+  save: () => Promise.resolve(),
+  load: () => Promise.resolve(null),
+});
+
 describe('ElevatorService', () => {
   it('assigns nearest elevator (basic)', () => {
-    const svc = new ElevatorService();
+    const svc = new ElevatorService(mockStore());
     svc.reset({ floors: 10, elevators: 2, tickMs: 1 });
 
     const internal = svc as unknown as InternalSvc;
@@ -26,16 +32,14 @@ describe('ElevatorService', () => {
     internal.state.elevators[1]!.currentFloor = 8;
 
     svc.callElevator(2, 'up');
-
-    if (typeof internal.step === 'function') internal.step(1);
-    else internal.tick();
+    internal.step(1);
 
     const st = svc.getState() as StatePublic;
     expect(st.elevators.some((e) => e.targets.includes(2))).toBe(true);
   });
 
   it('opens doors when reaching a target', () => {
-    const svc = new ElevatorService();
+    const svc = new ElevatorService(mockStore());
     svc.reset({ floors: 5, elevators: 1, ticksPerFloor: 1, doorOpenTicks: 2, tickMs: 1 });
 
     const internal = svc as unknown as InternalSvc;
@@ -51,7 +55,7 @@ describe('ElevatorService', () => {
   });
 
   it('SCAN changes direction after finishing current direction queue', () => {
-    const svc = new ElevatorService();
+    const svc = new ElevatorService(mockStore());
     svc.reset({ floors: 10, elevators: 1, ticksPerFloor: 1, tickMs: 1 });
 
     const internal = svc as unknown as InternalSvc;

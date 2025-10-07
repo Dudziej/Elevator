@@ -40,4 +40,10 @@ export class ElevatorController {
     this.svc.step(Number(n ?? 1));
     return { ok: true };
   }
+
+  @Post('snapshot')
+  @ApiExcludeEndpoint()
+  snapshot() {
+    return { ok: true };
+  }
 }
