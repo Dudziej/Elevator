@@ -5,17 +5,18 @@ import { Elevator, HallCall, SystemConfig, SystemState } from '../core/types';
 export class ElevatorService implements OnModuleInit, OnModuleDestroy {
   private state: SystemState;
   private timer?: ReturnType<typeof setInterval>;
+  private paused = false;
 
   constructor() {
     this.state = this.makeInitialState();
   }
 
   onModuleInit() {
-    this.timer = setInterval(() => this.tick(), this.state.config.tickMs);
+    if (process.env.NODE_ENV !== 'test') this.startTicker();
   }
 
   onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
+    this.stopTicker();
   }
 
   private makeInitialState(): SystemState {
@@ -80,9 +81,35 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
     this.enqueueTarget(e, floor);
   }
 
+  pause() {
+    this.paused = true;
+  }
+
+  resume() {
+    this.paused = false;
+  }
+
+  step(n = 1) {
+    for (let i = 0; i < n; i++) this.tick();
+  }
+
   // ---------- Helpers ----------
   private isValidFloor(f: number) {
     return Number.isInteger(f) && f >= 0 && f < this.state.config.floors;
+  }
+
+  private startTicker() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = setInterval(() => {
+      if (!this.paused) this.tick();
+    }, this.state.config.tickMs);
+  }
+
+  private stopTicker() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
   }
 
   // ---------- Scheduler ----------
