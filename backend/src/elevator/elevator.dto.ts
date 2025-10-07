@@ -1,8 +1,8 @@
-import { IsIn, IsInt, IsOptional, IsPositive, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, Min } from 'class-validator';
 
 export class CallDto {
   @IsInt() @Min(0) floor!: number;
-  @IsIn(['up','down']) direction!: 'up'|'down';
+  @IsIn(['up', 'down']) direction!: 'up' | 'down';
 }
 
 export class SelectDto {

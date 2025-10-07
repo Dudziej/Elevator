@@ -6,7 +6,9 @@ import { CallDto, ResetDto, SelectDto } from './elevator.dto';
 export class ElevatorController {
   constructor(private readonly svc: ElevatorService) {}
 
-  @Get('state') getState() { return this.svc.getState(); }
+  @Get('state') getState() {
+    return this.svc.getState();
+  }
 
   @Post('reset') reset(@Body() cfg: ResetDto) {
     this.svc.reset(cfg);
