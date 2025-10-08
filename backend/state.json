@@ -1,0 +1,57 @@
+{
+  "config": {
+    "floors": 16,
+    "elevators": 4,
+    "ticksPerFloor": 5,
+    "doorOpenTicks": 6,
+    "tickMs": 200
+  },
+  "elevators": [
+    {
+      "id": 0,
+      "currentFloor": 0,
+      "direction": "idle",
+      "door": "closed",
+      "doorTicks": 0,
+      "moveTicks": 0,
+      "targets": [],
+      "queueUp": [],
+      "queueDown": []
+    },
+    {
+      "id": 1,
+      "currentFloor": 0,
+      "direction": "idle",
+      "door": "closed",
+      "doorTicks": 0,
+      "moveTicks": 0,
+      "targets": [],
+      "queueUp": [],
+      "queueDown": []
+    },
+    {
+      "id": 2,
+      "currentFloor": 0,
+      "direction": "idle",
+      "door": "closed",
+      "doorTicks": 0,
+      "moveTicks": 0,
+      "targets": [],
+      "queueUp": [],
+      "queueDown": []
+    },
+    {
+      "id": 3,
+      "currentFloor": 0,
+      "direction": "idle",
+      "door": "closed",
+      "doorTicks": 0,
+      "moveTicks": 0,
+      "targets": [],
+      "queueUp": [],
+      "queueDown": []
+    }
+  ],
+  "pendingHallCalls": [],
+  "ts": 1759955064334
+}
