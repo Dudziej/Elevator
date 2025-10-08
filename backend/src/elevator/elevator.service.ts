@@ -151,6 +151,48 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
     for (const [k, exp] of this.seenKeys) if (exp <= now) this.seenKeys.delete(k);
   }
 
+  private estimateETA(e: Elevator, targetFloor: number): number {
+    const tpf = this.state.config.ticksPerFloor;
+    const door = this.state.config.doorOpenTicks;
+    let penalty = 0;
+
+    if (e.door === 'open') penalty += Math.max(0, e.doorTicks);
+    else if (e.door === 'opening') penalty += 1 + door;
+    else if (e.door === 'closing') penalty += 1;
+
+    const dist = (a: number, b: number) => Math.abs(a - b);
+
+    if (e.direction === 'idle' || (e.queueUp.length === 0 && e.queueDown.length === 0)) {
+      return penalty + dist(e.currentFloor, targetFloor) * tpf;
+    }
+
+    if (e.direction === 'up') {
+      if (targetFloor >= e.currentFloor) {
+        const betweenStops = e.queueUp.filter((f) => f > e.currentFloor && f < targetFloor).length;
+        return penalty + (targetFloor - e.currentFloor) * tpf + betweenStops * door;
+      } else {
+        const topUp = e.queueUp.at(-1) ?? e.currentFloor;
+        const upDistance = Math.max(0, topUp - e.currentFloor);
+        const upStops = e.queueUp.filter((f) => f > e.currentFloor).length;
+        const downDistance = Math.max(0, topUp - targetFloor);
+
+        return penalty + upDistance * tpf + upStops * door + downDistance * tpf;
+      }
+    }
+
+    if (targetFloor <= e.currentFloor) {
+      const betweenStops = e.queueDown.filter((f) => f < e.currentFloor && f > targetFloor).length;
+      return penalty + (e.currentFloor - targetFloor) * tpf + betweenStops * door;
+    } else {
+      const bottomDown = e.queueDown.at(-1) ?? e.currentFloor;
+      const downDistance = Math.max(0, e.currentFloor - bottomDown);
+      const downStops = e.queueDown.filter((f) => f < e.currentFloor).length;
+      const upDistance = Math.max(0, targetFloor - bottomDown);
+
+      return penalty + downDistance * tpf + downStops * door + upDistance * tpf;
+    }
+  }
+
   // ---------- Persistence helpers ----------
   private rehydrateFromSnapshot(snap: SystemState) {
     const sameShape =
@@ -196,6 +238,7 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
 
   private pickElevatorForHallCall(call: HallCall): Elevator | undefined {
     const { elevators } = this.state;
+
     const candidates = elevators.filter((e) => {
       if (e.direction === 'idle') return true;
       if (call.direction === 'up' && e.direction === 'up' && e.currentFloor <= call.floor)
@@ -204,13 +247,17 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
         return true;
       return false;
     });
+
     const pool = candidates.length ? candidates : elevators;
 
     const scored = pool.map((e) => {
-      const dist = Math.abs(e.currentFloor - call.floor);
-      const load = e.queueUp.length + e.queueDown.length;
-      return { e, score: dist * 10 + load };
+      const eta = this.estimateETA(e, call.floor);
+      const loadPenalty =
+        (e.queueUp.length + e.queueDown.length) *
+        Math.max(1, Math.floor(this.state.config.doorOpenTicks / 2));
+      return { e, score: eta + loadPenalty };
     });
+
     scored.sort((a, b) => a.score - b.score);
     return scored[0]?.e;
   }

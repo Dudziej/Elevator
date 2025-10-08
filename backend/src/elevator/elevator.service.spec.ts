@@ -71,4 +71,45 @@ describe('ElevatorService', () => {
     expect(e0.targets.length).toBe(0);
     expect(e0.direction === 'idle' || e0.door !== 'closed').toBeTruthy();
   });
+
+  it('ETA prefers elevator already heading towards the call', () => {
+    const svc = new ElevatorService(mockStore());
+    svc.reset({ floors: 20, elevators: 2, ticksPerFloor: 1, doorOpenTicks: 2, tickMs: 1 });
+
+    const internal = svc as unknown as InternalSvc;
+
+    internal.state.elevators[0]!.currentFloor = 2;
+    svc.selectFloor(0, 5);
+    svc.selectFloor(0, 7);
+
+    internal.state.elevators[1]!.currentFloor = 0;
+
+    svc.callElevator(4, 'up');
+    internal.step(1);
+
+    const st = svc.getState() as StatePublic;
+    const assignedToE0 = st.elevators[0]!.targets.includes(4);
+    expect(assignedToE0).toBe(true);
+  });
+
+  it('ETA prefers idle slightly farther over elevator going opposite direction', () => {
+    const svc = new ElevatorService(mockStore());
+    svc.reset({ floors: 20, elevators: 2, ticksPerFloor: 1, doorOpenTicks: 2, tickMs: 1 });
+
+    const internal = svc as unknown as InternalSvc;
+
+    internal.state.elevators[0]!.currentFloor = 5;
+    svc.selectFloor(0, 4);
+    svc.selectFloor(0, 3);
+    svc.selectFloor(0, 2);
+
+    internal.state.elevators[1]!.currentFloor = 8;
+
+    svc.callElevator(6, 'up');
+    internal.step(1);
+
+    const st = svc.getState() as StatePublic;
+    const assignedToE1 = st.elevators[1]!.targets.includes(6);
+    expect(assignedToE1).toBe(true);
+  });
 });
