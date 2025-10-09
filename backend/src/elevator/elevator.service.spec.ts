@@ -82,14 +82,16 @@ describe('ElevatorService', () => {
     svc.selectFloor(0, 5);
     svc.selectFloor(0, 7);
 
+    internal.step(1);
+
     internal.state.elevators[1]!.currentFloor = 0;
 
     svc.callElevator(4, 'up');
+
     internal.step(1);
 
     const st = svc.getState() as StatePublic;
-    const assignedToE0 = st.elevators[0]!.targets.includes(4);
-    expect(assignedToE0).toBe(true);
+    expect(st.elevators[0]!.targets.includes(4)).toBe(true);
   });
 
   it('ETA prefers idle slightly farther over elevator going opposite direction', () => {

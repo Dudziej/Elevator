@@ -5,9 +5,8 @@ import { ElevatorService } from '../elevator/elevator.service';
 
 @WebSocketGateway({
   namespace: '/ws',
-  cors: {
-    origin: '*',
-  },
+  cors: { origin: '*' },
+  path: '/socket.io',
 })
 export class ElevatorGateway implements OnModuleInit, OnModuleDestroy {
   @WebSocketServer()

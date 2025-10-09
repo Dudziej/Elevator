@@ -84,15 +84,20 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
   }
 
   reset(cfg?: Partial<SystemConfig>) {
-    if (cfg) this.state.config = { ...this.state.config, ...cfg };
+    if (cfg && Object.keys(cfg).length > 0) {
+      this.state.config = { ...this.state.config, ...cfg };
+    }
     const { elevators } = this.state.config;
     this.state.elevators = Array.from({ length: elevators }, (_, id) => this.makeElevator(id));
     this.state.pendingHallCalls = [];
-    this.snapshotTickCounter = 0;
+    this.seenKeys.clear();
+    this.state.ts = Date.now();
   }
 
   callElevator(floor: number, direction: 'up' | 'down') {
     if (!this.isValidFloor(floor)) return;
+    if (direction === 'up' && floor >= this.state.config.floors - 1) return;
+    if (direction === 'down' && floor <= 0) return;
     const key = `call:${floor}:${direction}`;
     if (this.isIdemp(key)) return;
     this.addIdemp(key);
@@ -237,29 +242,54 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private pickElevatorForHallCall(call: HallCall): Elevator | undefined {
-    const { elevators } = this.state;
+    const { elevators, config } = this.state;
+    const tpf = config.ticksPerFloor;
 
-    const candidates = elevators.filter((e) => {
-      if (e.direction === 'idle') return true;
-      if (call.direction === 'up' && e.direction === 'up' && e.currentFloor <= call.floor)
-        return true;
-      if (call.direction === 'down' && e.direction === 'down' && e.currentFloor >= call.floor)
-        return true;
-      return false;
-    });
+    const along = elevators
+      .filter(
+        (e) =>
+          (call.direction === 'up' && e.direction === 'up' && e.currentFloor <= call.floor) ||
+          (call.direction === 'down' && e.direction === 'down' && e.currentFloor >= call.floor),
+      )
+      .sort(
+        (a, b) => Math.abs(a.currentFloor - call.floor) - Math.abs(b.currentFloor - call.floor),
+      );
 
-    const pool = candidates.length ? candidates : elevators;
+    if (along.length) {
+      let best = along[0];
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (const e of along) {
+        const eta = this.estimateETA(e, call.floor);
+        const load = e.queueUp.length + e.queueDown.length;
+        const score = eta + load - Math.max(1, tpf);
+        if (score < bestScore) {
+          bestScore = score;
+          best = e;
+        }
+      }
+      return best;
+    }
 
-    const scored = pool.map((e) => {
+    const idle = elevators.filter((e) => e.direction === 'idle');
+    if (idle.length) {
+      idle.sort(
+        (a, b) => Math.abs(a.currentFloor - call.floor) - Math.abs(b.currentFloor - call.floor),
+      );
+      return idle[0];
+    }
+
+    let best = elevators[0];
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const e of elevators) {
       const eta = this.estimateETA(e, call.floor);
-      const loadPenalty =
-        (e.queueUp.length + e.queueDown.length) *
-        Math.max(1, Math.floor(this.state.config.doorOpenTicks / 2));
-      return { e, score: eta + loadPenalty };
-    });
-
-    scored.sort((a, b) => a.score - b.score);
-    return scored[0]?.e;
+      const load = e.queueUp.length + e.queueDown.length;
+      const score = eta + load;
+      if (score < bestScore) {
+        bestScore = score;
+        best = e;
+      }
+    }
+    return best;
   }
 
   private enqueueTarget(e: Elevator, floor: number, preferredDir?: 'up' | 'down') {
@@ -337,11 +367,64 @@ export class ElevatorService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      if (e.direction === 'up' && e.queueUp.length === 0 && e.queueDown.length > 0)
-        e.direction = 'down';
-      if (e.direction === 'down' && e.queueDown.length === 0 && e.queueUp.length > 0)
-        e.direction = 'up';
-      if (e.targets.size === 0) {
+      const anyAbove =
+        e.queueUp.some((f) => f > e.currentFloor) ||
+        e.queueDown.some((f) => f > e.currentFloor) ||
+        Array.from(e.targets).some((f) => f > e.currentFloor);
+
+      const anyBelow =
+        e.queueDown.some((f) => f < e.currentFloor) ||
+        e.queueUp.some((f) => f < e.currentFloor) ||
+        Array.from(e.targets).some((f) => f < e.currentFloor);
+
+      if (e.direction === 'up' && !anyAbove) {
+        if (anyBelow) {
+          e.direction = 'down';
+          e.moveTicks = 0;
+        } else {
+          e.direction = 'idle';
+          e.moveTicks = 0;
+          continue;
+        }
+      } else if (e.direction === 'down' && !anyBelow) {
+        if (anyAbove) {
+          e.direction = 'up';
+          e.moveTicks = 0;
+        } else {
+          e.direction = 'idle';
+          e.moveTicks = 0;
+          continue;
+        }
+      } else if (e.direction === 'idle') {
+        if (anyAbove && !anyBelow) e.direction = 'up';
+        else if (!anyAbove && anyBelow) e.direction = 'down';
+        else if (anyAbove && anyBelow) {
+          const higher = [
+            ...e.queueUp.filter((f) => f > e.currentFloor),
+            ...e.queueDown.filter((f) => f > e.currentFloor),
+            ...Array.from(e.targets).filter((f) => f > e.currentFloor),
+          ];
+          const lower = [
+            ...e.queueDown.filter((f) => f < e.currentFloor),
+            ...e.queueUp.filter((f) => f < e.currentFloor),
+            ...Array.from(e.targets).filter((f) => f < e.currentFloor),
+          ];
+          const nearestAbove = Math.min(...higher);
+          const nearestBelow = Math.max(...lower);
+          const distUp = Number.isFinite(nearestAbove)
+            ? Math.abs(nearestAbove - e.currentFloor)
+            : Infinity;
+          const distDown = Number.isFinite(nearestBelow)
+            ? Math.abs(nearestBelow - e.currentFloor)
+            : Infinity;
+          e.direction = distUp <= distDown ? 'up' : 'down';
+        } else {
+          e.moveTicks = 0;
+          continue;
+        }
+      }
+
+      if (!anyAbove && !anyBelow && e.targets.size === 0) {
         e.direction = 'idle';
         e.moveTicks = 0;
         continue;
